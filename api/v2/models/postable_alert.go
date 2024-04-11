@@ -33,6 +33,8 @@ type PostableAlert struct {
 	// Format: date-time
 	StartsAt strfmt.DateTime `json:"startsAt,omitempty"`
 
+	TriggerAt strfmt.DateTime `json:"triggerAt,omitempty"`
+
 	Alert
 }
 
