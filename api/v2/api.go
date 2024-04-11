@@ -42,7 +42,6 @@ import (
 	silence_ops "github.com/prometheus/alertmanager/api/v2/restapi/operations/silence"
 
 	"github.com/prometheus/alertmanager/api/metrics"
-	"github.com/prometheus/alertmanager/cluster"
 	"github.com/prometheus/alertmanager/config"
 	"github.com/prometheus/alertmanager/dispatch"
 	"github.com/prometheus/alertmanager/notify"
@@ -55,7 +54,6 @@ import (
 
 // API represents an Alertmanager API v2
 type API struct {
-	peer           cluster.ClusterPeer
 	silences       *silence.Silences
 	alerts         provider.Alerts
 	alertGroups    groupsFn
@@ -89,7 +87,6 @@ func NewAPI(
 	gf groupsFn,
 	sf getAlertStatusFn,
 	silences *silence.Silences,
-	peer cluster.ClusterPeer,
 	l log.Logger,
 	r prometheus.Registerer,
 ) (*API, error) {
@@ -97,7 +94,6 @@ func NewAPI(
 		alerts:         alerts,
 		getAlertStatus: sf,
 		alertGroups:    gf,
-		peer:           peer,
 		silences:       silences,
 		logger:         l,
 		m:              metrics.NewAlerts("v2", r),
@@ -192,31 +188,6 @@ func (api *API) getStatusHandler(params general_ops.GetStatusParams) middleware.
 			Status: &status,
 			Peers:  []*open_api_models.PeerStatus{},
 		},
-	}
-
-	// If alertmanager cluster feature is disabled, then api.peers == nil.
-	if api.peer != nil {
-		status := api.peer.Status()
-
-		peers := []*open_api_models.PeerStatus{}
-		for _, n := range api.peer.Peers() {
-			address := n.Address()
-			name := n.Name()
-			peers = append(peers, &open_api_models.PeerStatus{
-				Name:    &name,
-				Address: &address,
-			})
-		}
-
-		sort.Slice(peers, func(i, j int) bool {
-			return *peers[i].Name < *peers[j].Name
-		})
-
-		resp.Cluster = &open_api_models.ClusterStatus{
-			Name:   api.peer.Name(),
-			Status: &status,
-			Peers:  peers,
-		}
 	}
 
 	return general_ops.NewGetStatusOK().WithPayload(&resp)
@@ -595,16 +566,16 @@ func SortSilences(sils open_api_models.GettableSilences) {
 		}
 		switch state1 {
 		case types.SilenceStateActive:
-			endsAt1 := time.Time(*sils[i].Silence.EndsAt)
-			endsAt2 := time.Time(*sils[j].Silence.EndsAt)
+			endsAt1 := time.Unix(*sils[i].Silence.EndsAt, 0)
+			endsAt2 := time.Unix(*sils[j].Silence.EndsAt, 0)
 			return endsAt1.Before(endsAt2)
 		case types.SilenceStatePending:
-			startsAt1 := time.Time(*sils[i].Silence.StartsAt)
-			startsAt2 := time.Time(*sils[j].Silence.StartsAt)
+			startsAt1 := time.Unix(*sils[i].Silence.StartsAt, 0)
+			startsAt2 := time.Unix(*sils[j].Silence.StartsAt, 0)
 			return startsAt1.Before(startsAt2)
 		case types.SilenceStateExpired:
-			endsAt1 := time.Time(*sils[i].Silence.EndsAt)
-			endsAt2 := time.Time(*sils[j].Silence.EndsAt)
+			endsAt1 := time.Unix(*sils[i].Silence.EndsAt, 0)
+			endsAt2 := time.Unix(*sils[j].Silence.EndsAt, 0)
 			return endsAt1.After(endsAt2)
 		}
 		return false
@@ -665,7 +636,7 @@ func (api *API) deleteSilenceHandler(params silence_ops.DeleteSilenceParams) mid
 	logger := api.requestLogger(params.HTTPRequest)
 
 	sid := params.SilenceID.String()
-	if err := api.silences.Expire(sid); err != nil {
+	if err := api.silences.Expire(params.HTTPRequest.Context(), sid); err != nil {
 		level.Error(logger).Log("msg", "Failed to expire silence", "err", err)
 		if err == silence.ErrNotFound {
 			return silence_ops.NewDeleteSilenceNotFound()
@@ -698,7 +669,7 @@ func (api *API) postSilencesHandler(params silence_ops.PostSilencesParams) middl
 		return silence_ops.NewPostSilencesBadRequest().WithPayload(msg)
 	}
 
-	sid, err := api.silences.Set(sil)
+	sid, err := api.silences.Set(params.HTTPRequest.Context(), sil)
 	if err != nil {
 		level.Error(logger).Log("msg", "Failed to create silence", "err", err)
 		if err == silence.ErrNotFound {

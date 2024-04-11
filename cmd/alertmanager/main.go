@@ -21,7 +21,6 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -43,23 +42,12 @@ import (
 	webflag "github.com/prometheus/exporter-toolkit/web/kingpinflag"
 
 	"github.com/prometheus/alertmanager/api"
-	"github.com/prometheus/alertmanager/cluster"
 	"github.com/prometheus/alertmanager/config"
 	"github.com/prometheus/alertmanager/dispatch"
 	"github.com/prometheus/alertmanager/inhibit"
-	"github.com/prometheus/alertmanager/nflog"
 	"github.com/prometheus/alertmanager/notify"
-	"github.com/prometheus/alertmanager/notify/discord"
 	"github.com/prometheus/alertmanager/notify/email"
-	"github.com/prometheus/alertmanager/notify/msteams"
-	"github.com/prometheus/alertmanager/notify/opsgenie"
-	"github.com/prometheus/alertmanager/notify/pagerduty"
-	"github.com/prometheus/alertmanager/notify/pushover"
 	"github.com/prometheus/alertmanager/notify/slack"
-	"github.com/prometheus/alertmanager/notify/sns"
-	"github.com/prometheus/alertmanager/notify/telegram"
-	"github.com/prometheus/alertmanager/notify/victorops"
-	"github.com/prometheus/alertmanager/notify/webex"
 	"github.com/prometheus/alertmanager/notify/webhook"
 	"github.com/prometheus/alertmanager/notify/wechat"
 	"github.com/prometheus/alertmanager/provider/mem"
@@ -152,40 +140,12 @@ func buildReceiverIntegrations(nc config.Receiver, tmpl *template.Template, logg
 	for i, c := range nc.EmailConfigs {
 		add("email", i, c, func(l log.Logger) (notify.Notifier, error) { return email.New(c, tmpl, l), nil })
 	}
-	for i, c := range nc.PagerdutyConfigs {
-		add("pagerduty", i, c, func(l log.Logger) (notify.Notifier, error) { return pagerduty.New(c, tmpl, l) })
-	}
-	for i, c := range nc.OpsGenieConfigs {
-		add("opsgenie", i, c, func(l log.Logger) (notify.Notifier, error) { return opsgenie.New(c, tmpl, l) })
-	}
 	for i, c := range nc.WechatConfigs {
 		add("wechat", i, c, func(l log.Logger) (notify.Notifier, error) { return wechat.New(c, tmpl, l) })
 	}
 	for i, c := range nc.SlackConfigs {
 		add("slack", i, c, func(l log.Logger) (notify.Notifier, error) { return slack.New(c, tmpl, l) })
 	}
-	for i, c := range nc.VictorOpsConfigs {
-		add("victorops", i, c, func(l log.Logger) (notify.Notifier, error) { return victorops.New(c, tmpl, l) })
-	}
-	for i, c := range nc.PushoverConfigs {
-		add("pushover", i, c, func(l log.Logger) (notify.Notifier, error) { return pushover.New(c, tmpl, l) })
-	}
-	for i, c := range nc.SNSConfigs {
-		add("sns", i, c, func(l log.Logger) (notify.Notifier, error) { return sns.New(c, tmpl, l) })
-	}
-	for i, c := range nc.TelegramConfigs {
-		add("telegram", i, c, func(l log.Logger) (notify.Notifier, error) { return telegram.New(c, tmpl, l) })
-	}
-	for i, c := range nc.DiscordConfigs {
-		add("discord", i, c, func(l log.Logger) (notify.Notifier, error) { return discord.New(c, tmpl, l) })
-	}
-	for i, c := range nc.WebexConfigs {
-		add("webex", i, c, func(l log.Logger) (notify.Notifier, error) { return webex.New(c, tmpl, l) })
-	}
-	for i, c := range nc.MSTeamsConfigs {
-		add("msteams", i, c, func(l log.Logger) (notify.Notifier, error) { return msteams.New(c, tmpl, l) })
-	}
-
 	if errs.Len() > 0 {
 		return nil, &errs
 	}
@@ -203,34 +163,16 @@ func run() int {
 	}
 
 	var (
-		configFile          = kingpin.Flag("config.file", "Alertmanager configuration file name.").Default("alertmanager.yml").String()
-		dataDir             = kingpin.Flag("storage.path", "Base path for data storage.").Default("data/").String()
-		retention           = kingpin.Flag("data.retention", "How long to keep data for.").Default("120h").Duration()
-		maintenanceInterval = kingpin.Flag("data.maintenance-interval", "Interval between garbage collection and snapshotting to disk of the silences and the notification logs.").Default("15m").Duration()
-		alertGCInterval     = kingpin.Flag("alerts.gc-interval", "Interval between alert GC.").Default("30m").Duration()
+		configFile      = kingpin.Flag("config.file", "Alertmanager configuration file name.").Default("alertmanager.yml").String()
+		dataDir         = kingpin.Flag("storage.path", "Base path for data storage.").Default("data/").String()
+		retention       = kingpin.Flag("data.retention", "How long to keep data for.").Default("120h").Duration()
+		alertGCInterval = kingpin.Flag("alerts.gc-interval", "Interval between alert GC.").Default("30m").Duration()
 
 		webConfig      = webflag.AddFlags(kingpin.CommandLine, ":9093")
 		externalURL    = kingpin.Flag("web.external-url", "The URL under which Alertmanager is externally reachable (for example, if Alertmanager is served via a reverse proxy). Used for generating relative and absolute links back to Alertmanager itself. If the URL has a path portion, it will be used to prefix all HTTP endpoints served by Alertmanager. If omitted, relevant URL components will be derived automatically.").String()
 		routePrefix    = kingpin.Flag("web.route-prefix", "Prefix for the internal routes of web endpoints. Defaults to path of --web.external-url.").String()
 		getConcurrency = kingpin.Flag("web.get-concurrency", "Maximum number of GET requests processed concurrently. If negative or zero, the limit is GOMAXPROC or 8, whichever is larger.").Default("0").Int()
 		httpTimeout    = kingpin.Flag("web.timeout", "Timeout for HTTP requests. If negative or zero, no timeout is set.").Default("0").Duration()
-
-		clusterBindAddr = kingpin.Flag("cluster.listen-address", "Listen address for cluster. Set to empty string to disable HA mode.").
-				Default(defaultClusterAddr).String()
-		clusterAdvertiseAddr   = kingpin.Flag("cluster.advertise-address", "Explicit address to advertise in cluster.").String()
-		peers                  = kingpin.Flag("cluster.peer", "Initial peers (may be repeated).").Strings()
-		peerTimeout            = kingpin.Flag("cluster.peer-timeout", "Time to wait between peers to send notifications.").Default("15s").Duration()
-		gossipInterval         = kingpin.Flag("cluster.gossip-interval", "Interval between sending gossip messages. By lowering this value (more frequent) gossip messages are propagated across the cluster more quickly at the expense of increased bandwidth.").Default(cluster.DefaultGossipInterval.String()).Duration()
-		pushPullInterval       = kingpin.Flag("cluster.pushpull-interval", "Interval for gossip state syncs. Setting this interval lower (more frequent) will increase convergence speeds across larger clusters at the expense of increased bandwidth usage.").Default(cluster.DefaultPushPullInterval.String()).Duration()
-		tcpTimeout             = kingpin.Flag("cluster.tcp-timeout", "Timeout for establishing a stream connection with a remote node for a full state sync, and for stream read and write operations.").Default(cluster.DefaultTCPTimeout.String()).Duration()
-		probeTimeout           = kingpin.Flag("cluster.probe-timeout", "Timeout to wait for an ack from a probed node before assuming it is unhealthy. This should be set to 99-percentile of RTT (round-trip time) on your network.").Default(cluster.DefaultProbeTimeout.String()).Duration()
-		probeInterval          = kingpin.Flag("cluster.probe-interval", "Interval between random node probes. Setting this lower (more frequent) will cause the cluster to detect failed nodes more quickly at the expense of increased bandwidth usage.").Default(cluster.DefaultProbeInterval.String()).Duration()
-		settleTimeout          = kingpin.Flag("cluster.settle-timeout", "Maximum time to wait for cluster connections to settle before evaluating notifications.").Default(cluster.DefaultPushPullInterval.String()).Duration()
-		reconnectInterval      = kingpin.Flag("cluster.reconnect-interval", "Interval between attempting to reconnect to lost peers.").Default(cluster.DefaultReconnectInterval.String()).Duration()
-		peerReconnectTimeout   = kingpin.Flag("cluster.reconnect-timeout", "Length of time to attempt to reconnect to a lost peer.").Default(cluster.DefaultReconnectTimeout.String()).Duration()
-		tlsConfigFile          = kingpin.Flag("cluster.tls-config", "[EXPERIMENTAL] Path to config yaml file that can enable mutual TLS within the gossip protocol.").Default("").String()
-		allowInsecureAdvertise = kingpin.Flag("cluster.allow-insecure-public-advertise-address-discovery", "[EXPERIMENTAL] Allow alertmanager to discover and listen on a public IP address.").Bool()
-		label                  = kingpin.Flag("cluster.label", "The cluster label is an optional string to include on each packet and stream. It uniquely identifies the cluster and prevents cross-communication issues when sending gossip messages.").Default("").String()
 	)
 
 	promlogflag.AddFlags(kingpin.CommandLine, &promlogConfig)
@@ -251,69 +193,14 @@ func run() int {
 		return 1
 	}
 
-	tlsTransportConfig, err := cluster.GetTLSTransportConfig(*tlsConfigFile)
-	if err != nil {
-		level.Error(logger).Log("msg", "unable to initialize TLS transport configuration for gossip mesh", "err", err)
-		return 1
-	}
-	var peer *cluster.Peer
-	if *clusterBindAddr != "" {
-		peer, err = cluster.Create(
-			log.With(logger, "component", "cluster"),
-			prometheus.DefaultRegisterer,
-			*clusterBindAddr,
-			*clusterAdvertiseAddr,
-			*peers,
-			true,
-			*pushPullInterval,
-			*gossipInterval,
-			*tcpTimeout,
-			*probeTimeout,
-			*probeInterval,
-			tlsTransportConfig,
-			*allowInsecureAdvertise,
-			*label,
-		)
-		if err != nil {
-			level.Error(logger).Log("msg", "unable to initialize gossip mesh", "err", err)
-			return 1
-		}
-		clusterEnabled.Set(1)
-	}
-
 	stopc := make(chan struct{})
 	var wg sync.WaitGroup
-
-	notificationLogOpts := nflog.Options{
-		SnapshotFile: filepath.Join(*dataDir, "nflog"),
-		Retention:    *retention,
-		Logger:       log.With(logger, "component", "nflog"),
-		Metrics:      prometheus.DefaultRegisterer,
-	}
-
-	notificationLog, err := nflog.New(notificationLogOpts)
-	if err != nil {
-		level.Error(logger).Log("err", err)
-		return 1
-	}
-	if peer != nil {
-		c := peer.AddState("nfl", notificationLog, prometheus.DefaultRegisterer)
-		notificationLog.SetBroadcast(c.Broadcast)
-	}
-
-	wg.Add(1)
-	go func() {
-		notificationLog.Maintenance(*maintenanceInterval, filepath.Join(*dataDir, "nflog"), stopc, nil)
-		wg.Done()
-	}()
 
 	marker := types.NewMarker(prometheus.DefaultRegisterer)
 
 	silenceOpts := silence.Options{
-		SnapshotFile: filepath.Join(*dataDir, "silences"),
-		Retention:    *retention,
-		Logger:       log.With(logger, "component", "silences"),
-		Metrics:      prometheus.DefaultRegisterer,
+		Logger:  log.With(logger, "component", "silences"),
+		Metrics: prometheus.DefaultRegisterer,
 	}
 
 	silences, err := silence.New(silenceOpts)
@@ -321,41 +208,11 @@ func run() int {
 		level.Error(logger).Log("err", err)
 		return 1
 	}
-	if peer != nil {
-		c := peer.AddState("sil", silences, prometheus.DefaultRegisterer)
-		silences.SetBroadcast(c.Broadcast)
-	}
-
-	// Start providers before router potentially sends updates.
-	wg.Add(1)
-	go func() {
-		silences.Maintenance(*maintenanceInterval, filepath.Join(*dataDir, "silences"), stopc, nil)
-		wg.Done()
-	}()
 
 	defer func() {
 		close(stopc)
 		wg.Wait()
 	}()
-
-	// Peer state listeners have been registered, now we can join and get the initial state.
-	if peer != nil {
-		err = peer.Join(
-			*reconnectInterval,
-			*peerReconnectTimeout,
-		)
-		if err != nil {
-			level.Warn(logger).Log("msg", "unable to join gossip mesh", "err", err)
-		}
-		ctx, cancel := context.WithTimeout(context.Background(), *settleTimeout)
-		defer func() {
-			cancel()
-			if err := peer.Leave(10 * time.Second); err != nil {
-				level.Warn(logger).Log("msg", "unable to leave gossip mesh", "err", err)
-			}
-		}()
-		go peer.Settle(ctx, *gossipInterval*10)
-	}
 
 	alerts, err := mem.NewAlerts(context.Background(), marker, *alertGCInterval, nil, logger, prometheus.DefaultRegisterer)
 	if err != nil {
@@ -373,19 +230,10 @@ func run() int {
 		return disp.Groups(routeFilter, alertFilter)
 	}
 
-	// An interface value that holds a nil concrete value is non-nil.
-	// Therefore we explicly pass an empty interface, to detect if the
-	// cluster is not enabled in notify.
-	var clusterPeer cluster.ClusterPeer
-	if peer != nil {
-		clusterPeer = peer
-	}
-
 	api, err := api.New(api.Options{
 		Alerts:      alerts,
 		Silences:    silences,
 		StatusFunc:  marker.Status,
-		Peer:        clusterPeer,
 		Timeout:     *httpTimeout,
 		Concurrency: *getConcurrency,
 		Logger:      log.With(logger, "component", "api"),
@@ -405,9 +253,7 @@ func run() int {
 	level.Debug(logger).Log("externalURL", amURL.String())
 
 	waitFunc := func() time.Duration { return 0 }
-	if peer != nil {
-		waitFunc = clusterWait(peer, *peerTimeout)
-	}
+
 	timeoutFunc := func(d time.Duration) time.Duration {
 		if d < notify.MinTimeout {
 			d = notify.MinTimeout
@@ -476,14 +322,6 @@ func run() int {
 		inhibitor = inhibit.NewInhibitor(alerts, conf.InhibitRules, marker, logger)
 		silencer := silence.NewSilencer(silences, marker, logger)
 
-		// An interface value that holds a nil concrete value is non-nil.
-		// Therefore we explicly pass an empty interface, to detect if the
-		// cluster is not enabled in notify.
-		var pipelinePeer notify.Peer
-		if peer != nil {
-			pipelinePeer = peer
-		}
-
 		activeReceivers := make([]*notify.Receiver, 0, len(receivers))
 		for i := range receivers {
 			if !receivers[i].Active() {
@@ -493,13 +331,11 @@ func run() int {
 		}
 
 		pipeline := pipelineBuilder.New(
+			nil,
 			activeReceivers,
-			waitFunc,
 			inhibitor,
 			silencer,
 			timeIntervals,
-			notificationLog,
-			pipelinePeer,
 		)
 		configuredReceivers.Set(float64(len(activeReceiversMap)))
 		configuredIntegrations.Set(float64(integrationsNum))
@@ -604,14 +440,6 @@ func run() int {
 		case <-srvc:
 			return 1
 		}
-	}
-}
-
-// clusterWait returns a function that inspects the current peer state and returns
-// a duration of one base timeout for each peer with a higher ID than ourselves.
-func clusterWait(p *cluster.Peer, timeout time.Duration) func() time.Duration {
-	return func() time.Duration {
-		return time.Duration(p.Position()) * timeout
 	}
 }
 
