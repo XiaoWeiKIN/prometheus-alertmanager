@@ -297,8 +297,6 @@ func (e *MultiError) Error() string {
 type Alert struct {
 	model.Alert
 	RuleUID string
-	// The threshold timestamp
-	TriggerAt time.Time
 	// The authoritative timestamp.
 	UpdatedAt time.Time
 	Timeout   bool

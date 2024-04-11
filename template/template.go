@@ -310,6 +310,7 @@ type Alert struct {
 	Status       string    `json:"status"`
 	Labels       KV        `json:"labels"`
 	Annotations  KV        `json:"annotations"`
+	TriggerAt    time.Time `json:"triggerAt"`
 	StartsAt     time.Time `json:"startsAt"`
 	EndsAt       time.Time `json:"endsAt"`
 	GeneratorURL string    `json:"generatorURL"`
@@ -360,6 +361,7 @@ func (t *Template) Data(recv string, groupLabels model.LabelSet, alerts ...*type
 			Status:       string(a.Status()),
 			Labels:       make(KV, len(a.Labels)),
 			Annotations:  make(KV, len(a.Annotations)),
+			TriggerAt:    a.TriggerAt,
 			StartsAt:     a.StartsAt,
 			EndsAt:       a.EndsAt,
 			GeneratorURL: a.GeneratorURL,
