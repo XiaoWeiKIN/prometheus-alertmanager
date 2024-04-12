@@ -357,6 +357,7 @@ func (a *Alert) Merge(o *Alert) *Alert {
 	// Always pick the earliest starting time.
 	if a.StartsAt.Before(o.StartsAt) {
 		res.StartsAt = a.StartsAt
+		res.TriggerAt = a.TriggerAt
 	}
 
 	if o.Resolved() {
