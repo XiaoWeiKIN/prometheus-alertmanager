@@ -15,8 +15,6 @@ package notify
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -24,6 +22,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/cespare/xxhash/v2"
 	"github.com/go-kit/log"
 	"github.com/go-kit/log/level"
 	"github.com/pkg/errors"
@@ -152,12 +151,12 @@ func WithGroupKey(ctx context.Context, s string) context.Context {
 }
 
 // WithFiringAlerts populates a context with a slice of firing alerts.
-func WithFiringAlerts(ctx context.Context, alerts []string) context.Context {
+func WithFiringAlerts(ctx context.Context, alerts []uint64) context.Context {
 	return context.WithValue(ctx, keyFiringAlerts, alerts)
 }
 
 // WithResolvedAlerts populates a context with a slice of resolved alerts.
-func WithResolvedAlerts(ctx context.Context, alerts []string) context.Context {
+func WithResolvedAlerts(ctx context.Context, alerts []uint64) context.Context {
 	return context.WithValue(ctx, keyResolvedAlerts, alerts)
 }
 
@@ -227,15 +226,15 @@ func Now(ctx context.Context) (time.Time, bool) {
 
 // FiringAlerts extracts a slice of firing alerts from the context.
 // Iff none exists, the second argument is false.
-func FiringAlerts(ctx context.Context) ([]string, bool) {
-	v, ok := ctx.Value(keyFiringAlerts).([]string)
+func FiringAlerts(ctx context.Context) ([]uint64, bool) {
+	v, ok := ctx.Value(keyFiringAlerts).([]uint64)
 	return v, ok
 }
 
 // ResolvedAlerts extracts a slice of firing alerts from the context.
 // Iff none exists, the second argument is false.
-func ResolvedAlerts(ctx context.Context) ([]string, bool) {
-	v, ok := ctx.Value(keyResolvedAlerts).([]string)
+func ResolvedAlerts(ctx context.Context) ([]uint64, bool) {
+	v, ok := ctx.Value(keyResolvedAlerts).([]uint64)
 	return v, ok
 }
 
@@ -503,6 +502,7 @@ func NewDedupStage(rdb redis.Cmdable, rs ResolvedSender, recv *nflogpb.Receiver)
 		rs:   rs,
 		recv: recv,
 		now:  now,
+		hash: hashAlert,
 	}
 }
 
@@ -510,8 +510,43 @@ func now() time.Time {
 	return time.Now()
 }
 
-func stateKey(k string, r *nflogpb.Receiver, hash string) string {
-	return fmt.Sprintf("%s:%s:%s", k, receiverKey(r), hash)
+// Wrap a slice in a struct so we can store a pointer in sync.Pool
+type hashBuffer struct {
+	buf []byte
+}
+
+var hashBuffers = sync.Pool{
+	New: func() interface{} { return &hashBuffer{buf: make([]byte, 0, 1024)} },
+}
+
+func hashAlert(a *types.Alert) uint64 {
+	const sep = '\xff'
+
+	hb := hashBuffers.Get().(*hashBuffer)
+	defer hashBuffers.Put(hb)
+	b := hb.buf[:0]
+
+	names := make(model.LabelNames, 0, len(a.Labels))
+
+	for ln := range a.Labels {
+		names = append(names, ln)
+	}
+	sort.Sort(names)
+
+	for _, ln := range names {
+		b = append(b, string(ln)...)
+		b = append(b, sep)
+		b = append(b, string(a.Labels[ln])...)
+		b = append(b, sep)
+	}
+
+	hash := xxhash.Sum64(b)
+
+	return hash
+}
+
+func stateKey(k string, r *nflogpb.Receiver, hash uint64) string {
+	return fmt.Sprintf("%s:%s:%d", k, receiverKey(r), hash)
 }
 
 func receiverKey(r *nflogpb.Receiver) string {
@@ -532,12 +567,12 @@ func (n *DedupStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.Al
 	if !ok {
 		flushTime = n.now()
 	}
-	var firing []string
-	var resolved []string
+	var firing []uint64
+	var resolved []uint64
 	needsUpdateAlerts := make([]*types.Alert, 0)
+	var hash uint64
 	for _, a := range alerts {
-		labels := AlertLabels(a.Labels)
-		_, hash, _ := labels.hashAlert()
+		hash = n.hash(a)
 		sKey := stateKey(gkey, n.recv, hash)
 		if a.Resolved() {
 			resolved = append(resolved, hash)
@@ -831,53 +866,4 @@ func inTimeIntervals(now time.Time, intervals map[string][]timeinterval.TimeInte
 		}
 	}
 	return false, nil
-}
-
-type AlertLabels model.LabelSet
-
-// StringAndHash returns a the json representation of the labels as tuples
-// sorted by key. It also returns the a hash of that representation.
-func (al *AlertLabels) hashAlert() (string, string, error) {
-	tl := labelsToTupleLabels(*al)
-
-	b, err := json.Marshal(tl)
-	if err != nil {
-		return "", "", fmt.Errorf("could not generate key for alert instance due to failure to encode labels: %w", err)
-	}
-
-	h := sha1.New()
-	if _, err := h.Write(b); err != nil {
-		return "", "", err
-	}
-
-	return string(b), fmt.Sprintf("%x", h.Sum(nil)), nil
-}
-
-// The following is based on SDK code, copied for now
-
-// tupleLables is an alternative representation of Labels (map[string]string) that can be sorted
-// and then marshalled into a consistent string that can be used a map key. All tupleLabel objects
-// in tupleLabels should have unique first elements (keys).
-type tupleLabels []tupleLabel
-
-// tupleLabel is an element of tupleLabels and should be in the form of [2]{"key", "value"}.
-type tupleLabel [2]string
-
-// Sort tupleLabels by each elements first property (key).
-func (t *tupleLabels) sortByKey() {
-	if t == nil {
-		return
-	}
-	sort.Slice((*t)[:], func(i, j int) bool {
-		return (*t)[i][0] < (*t)[j][0]
-	})
-}
-
-func labelsToTupleLabels(l AlertLabels) tupleLabels {
-	t := make(tupleLabels, 0, len(l))
-	for k, v := range l {
-		t = append(t, tupleLabel{string(k), string(v)})
-	}
-	t.sortByKey()
-	return t
 }
