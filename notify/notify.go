@@ -398,10 +398,10 @@ func (rs RoutingStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.
 	if !ok {
 		return ctx, nil, errors.New("receiver missing")
 	}
-
 	s, ok := rs[receiver]
 	if !ok {
-		return ctx, nil, errors.Errorf("stage for receiver [%s] missing", receiver)
+		group, _ := GroupKey(ctx)
+		return ctx, nil, errors.Errorf("stage for receiver [%s] group [%s] missing", receiver, group)
 
 	}
 
