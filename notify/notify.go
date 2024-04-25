@@ -737,23 +737,23 @@ func (r RetryStage) exec(ctx context.Context, l log.Logger, alerts ...*types.Ale
 	}
 }
 
-// SetNotifiesStage sets the notification information about passed alerts. The
+// ClearSKeyStage sets the notification information about passed alerts. The
 // passed alerts should have already been sent to the receivers.
-type SetNotifiesStage struct {
+type ClearSKeyStage struct {
 	rdb  redis.Cmdable
 	recv *nflogpb.Receiver
 }
 
-// NewSetNotifiesStage returns a new instance of a SetNotifiesStage.
-func NewSetNotifiesStage(rdb redis.Cmdable, recv *nflogpb.Receiver) *SetNotifiesStage {
-	return &SetNotifiesStage{
+// NewClearSKeysStage returns a new instance of a ClearSKeyStage.
+func NewClearSKeysStage(rdb redis.Cmdable, recv *nflogpb.Receiver) *ClearSKeyStage {
+	return &ClearSKeyStage{
 		rdb:  rdb,
 		recv: recv,
 	}
 }
 
 // Exec implements the Stage interface.
-func (n SetNotifiesStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.Alert) (context.Context, []*types.Alert, error) {
+func (n ClearSKeyStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.Alert) (context.Context, []*types.Alert, error) {
 	gkey, ok := GroupKey(ctx)
 	if !ok {
 		return ctx, nil, errors.New("group key missing")
@@ -778,6 +778,34 @@ func (n SetNotifiesStage) Exec(ctx context.Context, l log.Logger, alerts ...*typ
 		}
 	}
 	return ctx, alerts, err
+}
+
+type SetSentCountStage struct {
+	rdb redis.Cmdable
+}
+
+func NewSetSentCountStage(rdb redis.Cmdable) *SetSentCountStage {
+	return &SetSentCountStage{
+		rdb: rdb,
+	}
+}
+
+func (n SetSentCountStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.Alert) (context.Context, []*types.Alert, error) {
+	sentContext := context.Background()
+	sentContext, cancel := context.WithTimeout(sentContext, 5*time.Second)
+	go func(ctx context.Context) {
+		defer cancel()
+		for _, a := range alerts {
+			count, err := n.rdb.Incr(ctx, a.Fingerprint().String()).Result()
+			if err != nil {
+				level.Warn(l).Log("msg", "Incr sent count to redis failed", "err", err)
+				continue
+			}
+			a.SentCount = count
+		}
+	}(sentContext)
+
+	return ctx, alerts, nil
 }
 
 type timeStage struct {
