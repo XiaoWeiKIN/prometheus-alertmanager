@@ -804,7 +804,6 @@ func (n SetSentCountStage) Exec(ctx context.Context, l log.Logger, alerts ...*ty
 			a.SentCount = count
 		}
 	}(sentContext)
-
 	return ctx, alerts, nil
 }
 
