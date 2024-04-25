@@ -46,6 +46,8 @@ type ResolvedSender interface {
 // to a notification pipeline.
 const MinTimeout = 10 * time.Second
 
+const AlertSentPrefix = "alert-sent-"
+
 // Notifier notifies about alerts under constraints of the given context. It
 // returns an error if unsuccessful and a flag whether the error is
 // recoverable. This information is useful for a retry logic.
@@ -795,14 +797,26 @@ func (n SetSentCountStage) Exec(ctx context.Context, l log.Logger, alerts ...*ty
 	sentContext, cancel := context.WithTimeout(sentContext, 5*time.Second)
 	go func(ctx context.Context) {
 		defer cancel()
+		var resolved []string
+		var firings []string
 		for _, a := range alerts {
-			count, err := n.rdb.Incr(ctx, a.Fingerprint().String()).Result()
-			if err != nil {
-				level.Warn(l).Log("msg", "Incr sent count to redis failed", "err", err)
-				continue
+			sentKey := AlertSentPrefix + a.Fingerprint().String()
+			if a.Resolved() {
+				resolved = append(resolved, sentKey)
+			} else {
+				firings = append(firings, sentKey)
+				count, err := n.rdb.Incr(ctx, sentKey).Result()
+				if err != nil {
+					level.Warn(l).Log("msg", "Incr sent count to redis failed", "err", err)
+					continue
+				}
+				a.SentCount = count
 			}
-			a.SentCount = count
 		}
+		if ruleUID, ok := RuleUID(ctx); ok {
+			n.rdb.SAdd(ctx, AlertSentPrefix+ruleUID, firings)
+		}
+		n.rdb.Del(ctx, resolved...)
 	}(sentContext)
 	return ctx, alerts, nil
 }
