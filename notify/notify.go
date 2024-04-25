@@ -593,15 +593,16 @@ func (n *DedupStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.Al
 			}
 			if needsUpdate {
 				firing = append(firing, hash)
-				level.Info(l).Log("msg", "Set stateKey to redis success", "stateKey", sKey)
-				err = n.rdb.SAdd(ctx, a.RuleUID, sKey).Err()
-				if err != nil {
-					level.Error(l).Log("msg", "Set ruleUID idx to redis failed", "UID", a.RuleUID, "stateKey", sKey, "err", err)
-					continue
+				// Record the index of the rule and sKey so that
+				// all sKeys are deleted when the rule is deleted or updated.
+				if a.RuleUID != "" {
+					if err = n.rdb.SAdd(ctx, a.RuleUID, sKey).Err(); err != nil {
+						level.Error(l).Log("msg", "Set rule uid idx to redis failed", "UID", a.RuleUID, "stateKey", sKey, "err", err)
+						continue
+					}
 				}
 				needsUpdateAlerts = append(needsUpdateAlerts, a)
 			}
-
 		}
 
 		ctx = WithRuleUID(ctx, a.RuleUID)

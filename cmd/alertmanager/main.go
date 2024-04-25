@@ -102,7 +102,6 @@ func init() {
 	prometheus.MustRegister(clusterEnabled)
 	prometheus.MustRegister(configuredReceivers)
 	prometheus.MustRegister(configuredIntegrations)
-	prometheus.MustRegister(version.NewCollector("alertmanager"))
 }
 
 func instrumentHandler(handlerName string, handler http.HandlerFunc) http.HandlerFunc {
