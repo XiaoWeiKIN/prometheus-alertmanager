@@ -763,7 +763,7 @@ func (n ClearSKeyStage) Exec(ctx context.Context, l log.Logger, alerts ...*types
 	if !ok {
 		return ctx, alerts, nil
 	}
-	if firing, ok := FiringAlerts(ctx); ok {
+	if firing, ok := FiringAlerts(ctx); ok && len(firing) > 0 {
 		stateKeys := make([]string, len(firing))
 		for _, hash := range firing {
 			sKey := stateKey(gkey, n.recv, hash)
@@ -775,7 +775,7 @@ func (n ClearSKeyStage) Exec(ctx context.Context, l log.Logger, alerts ...*types
 		}
 	}
 
-	if resolved, ok := ResolvedAlerts(ctx); ok {
+	if resolved, ok := ResolvedAlerts(ctx); ok && len(resolved) > 0 {
 		stateKeys := make([]string, len(resolved))
 		for _, hash := range resolved {
 			sKey := stateKey(gkey, n.recv, hash)
