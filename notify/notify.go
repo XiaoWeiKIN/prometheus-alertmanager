@@ -795,12 +795,13 @@ func NewSetSentCountStage(rdb redis.Cmdable) *SetSentCountStage {
 func (n SetSentCountStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.Alert) (context.Context, []*types.Alert, error) {
 	sentContext := context.Background()
 	sentContext, cancel := context.WithTimeout(sentContext, 5*time.Second)
-	go func(ctx context.Context) {
+	gKey, _ := GroupKey(ctx)
+	go func(ctx context.Context, gKey string) {
 		defer cancel()
 		var resolved []string
 		var firings []string
 		for _, a := range alerts {
-			sentKey := AlertSentPrefix + a.Fingerprint().String()
+			sentKey := AlertSentPrefix + gKey + a.Fingerprint().String()
 			if a.Resolved() {
 				resolved = append(resolved, sentKey)
 			} else {
@@ -817,7 +818,7 @@ func (n SetSentCountStage) Exec(ctx context.Context, l log.Logger, alerts ...*ty
 			n.rdb.SAdd(ctx, AlertSentPrefix+ruleUID, firings)
 		}
 		n.rdb.Del(ctx, resolved...)
-	}(sentContext)
+	}(sentContext, gKey)
 	return ctx, alerts, nil
 }
 
