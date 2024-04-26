@@ -769,6 +769,7 @@ func (n ClearSKeyStage) Exec(ctx context.Context, l log.Logger, alerts ...*types
 			sKey := stateKey(gkey, n.recv, hash)
 			stateKeys = append(stateKeys, sKey, AlertSentPrefix+sKey)
 		}
+
 		if err := n.rdb.SAdd(ctx, ruleUID, stateKeys).Err(); err != nil {
 			level.Error(l).Log("msg", "Set rule uid idx to redis failed", "UID", ruleUID, "err", err)
 		}
@@ -780,6 +781,7 @@ func (n ClearSKeyStage) Exec(ctx context.Context, l log.Logger, alerts ...*types
 			sKey := stateKey(gkey, n.recv, hash)
 			stateKeys = append(stateKeys, sKey, AlertSentPrefix+sKey)
 		}
+
 		if err := n.rdb.Del(ctx, stateKeys...).Err(); err != nil {
 			level.Error(l).Log("msg", "Del stateKeys to redis failed", "stateKeys", strings.Join(stateKeys, ","))
 		}
