@@ -438,6 +438,7 @@ func (fs FanoutStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.A
 	var (
 		wg sync.WaitGroup
 		me types.MultiError
+		as []*types.Alert
 	)
 	wg.Add(len(fs))
 
@@ -452,9 +453,9 @@ func (fs FanoutStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.A
 	wg.Wait()
 
 	if me.Len() > 0 {
-		return ctx, alerts, &me
+		return ctx, as, &me
 	}
-	return ctx, alerts, nil
+	return ctx, as, nil
 }
 
 // MuteStage filters alerts through a Muter.
@@ -595,18 +596,12 @@ func (n *DedupStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.Al
 			}
 			if needsUpdate {
 				firing = append(firing, hash)
-				// Record the index of the rule and sKey so that
-				// all sKeys are deleted when the rule is deleted or updated.
-				if a.RuleUID != "" {
-					if err = n.rdb.SAdd(ctx, a.RuleUID, sKey).Err(); err != nil {
-						level.Error(l).Log("msg", "Set rule uid idx to redis failed", "UID", a.RuleUID, "stateKey", sKey, "err", err)
-						continue
-					}
+				if count, err := n.rdb.Incr(ctx, AlertSentPrefix+sKey).Result(); err == nil {
+					a.SentCount = count + 1
 				}
 				needsUpdateAlerts = append(needsUpdateAlerts, a)
 			}
 		}
-
 		ctx = WithRuleUID(ctx, a.RuleUID)
 	}
 	ctx = WithFiringAlerts(ctx, firing)
@@ -760,65 +755,34 @@ func (n ClearSKeyStage) Exec(ctx context.Context, l log.Logger, alerts ...*types
 	if !ok {
 		return ctx, nil, errors.New("group key missing")
 	}
-	resolved, ok := ResolvedAlerts(ctx)
+	ruleUID, ok := RuleUID(ctx)
 	if !ok {
-		return ctx, nil, errors.New("resolved alerts missing")
+		return ctx, alerts, nil
 	}
-	stateKeys := make([]string, len(resolved))
-	for _, hash := range resolved {
-		stateKeys = append(stateKeys, stateKey(gkey, n.recv, hash))
-	}
-	var err error
-	if len(stateKeys) != 0 {
-		if ruleUID, ok := RuleUID(ctx); ok {
-			if err = n.rdb.SRem(ctx, ruleUID, stateKeys).Err(); err != nil {
-				level.Error(l).Log("msg", "Del stateKeys idx to redis failed", "stateKeys", strings.Join(stateKeys, ","))
-			}
+	if firing, ok := FiringAlerts(ctx); ok {
+		stateKeys := make([]string, len(firing))
+		for _, hash := range firing {
+			sKey := stateKey(gkey, n.recv, hash)
+			stateKeys = append(stateKeys, sKey, AlertSentPrefix+sKey)
 		}
-		if err = n.rdb.Del(ctx, stateKeys...).Err(); err != nil {
+		if err := n.rdb.SAdd(ctx, ruleUID, stateKeys).Err(); err != nil {
+			level.Error(l).Log("msg", "Set rule uid idx to redis failed", "UID", ruleUID, "err", err)
+		}
+	}
+
+	if resolved, ok := ResolvedAlerts(ctx); ok {
+		stateKeys := make([]string, len(resolved))
+		for _, hash := range resolved {
+			sKey := stateKey(gkey, n.recv, hash)
+			stateKeys = append(stateKeys, sKey, AlertSentPrefix+sKey)
+		}
+		if err := n.rdb.Del(ctx, stateKeys...).Err(); err != nil {
 			level.Error(l).Log("msg", "Del stateKeys to redis failed", "stateKeys", strings.Join(stateKeys, ","))
 		}
-	}
-	return ctx, alerts, err
-}
-
-type SetSentCountStage struct {
-	rdb redis.Cmdable
-}
-
-func NewSetSentCountStage(rdb redis.Cmdable) *SetSentCountStage {
-	return &SetSentCountStage{
-		rdb: rdb,
-	}
-}
-
-func (n SetSentCountStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.Alert) (context.Context, []*types.Alert, error) {
-	sentContext := context.Background()
-	sentContext, cancel := context.WithTimeout(sentContext, 5*time.Second)
-	gKey, _ := GroupKey(ctx)
-	go func(ctx context.Context, gKey string) {
-		defer cancel()
-		var resolved []string
-		var firings []string
-		for _, a := range alerts {
-			sentKey := AlertSentPrefix + gKey + a.Fingerprint().String()
-			if a.Resolved() {
-				resolved = append(resolved, sentKey)
-			} else {
-				firings = append(firings, sentKey)
-				count, err := n.rdb.Incr(ctx, sentKey).Result()
-				if err != nil {
-					level.Warn(l).Log("msg", "Incr sent count to redis failed", "err", err)
-					continue
-				}
-				a.SentCount = count
-			}
+		if err := n.rdb.SRem(ctx, ruleUID, stateKeys).Err(); err != nil {
+			level.Error(l).Log("msg", "Del stateKeys idx to redis failed", "stateKeys", strings.Join(stateKeys, ","))
 		}
-		if ruleUID, ok := RuleUID(ctx); ok {
-			n.rdb.SAdd(ctx, AlertSentPrefix+ruleUID, firings)
-		}
-		n.rdb.Del(ctx, resolved...)
-	}(sentContext, gKey)
+	}
 	return ctx, alerts, nil
 }
 
