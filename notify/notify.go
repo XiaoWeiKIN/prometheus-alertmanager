@@ -586,7 +586,11 @@ func (n *DedupStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.Al
 			}
 			// If the firing alert send, need send resolved message, otherwise, no need.
 			if exist == 1 {
+				if count, err := n.rdb.Get(ctx, AlertSentPrefix+sKey).Int64(); err == nil {
+					a.SentCount = count
+				}
 				needsUpdateAlerts = append(needsUpdateAlerts, a)
+
 			}
 		} else {
 			needsUpdate, err := n.rdb.SetNX(ctx, sKey, flushTime, repeatInterval).Result()
@@ -597,7 +601,7 @@ func (n *DedupStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.Al
 			if needsUpdate {
 				firing = append(firing, hash)
 				if count, err := n.rdb.Incr(ctx, AlertSentPrefix+sKey).Result(); err == nil {
-					a.SentCount = count + 1
+					a.SentCount = count
 				}
 				needsUpdateAlerts = append(needsUpdateAlerts, a)
 			}
