@@ -315,6 +315,7 @@ type Alert struct {
 	EndsAt       time.Time `json:"endsAt"`
 	GeneratorURL string    `json:"generatorURL"`
 	Fingerprint  string    `json:"fingerprint"`
+	SentCount    int64     `json:"sentCount"`
 }
 
 // Alerts is a list of Alert objects.
@@ -366,6 +367,7 @@ func (t *Template) Data(recv string, groupLabels model.LabelSet, alerts ...*type
 			EndsAt:       a.EndsAt,
 			GeneratorURL: a.GeneratorURL,
 			Fingerprint:  a.Fingerprint().String(),
+			SentCount:    a.SentCount,
 		}
 		for k, v := range a.Labels {
 			alert.Labels[string(k)] = string(v)

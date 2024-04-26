@@ -298,7 +298,6 @@ type Alert struct {
 	model.Alert
 	RuleUID string
 	// The authoritative timestamp.
-	SentCount int64
 	UpdatedAt time.Time
 	Timeout   bool
 }
