@@ -358,6 +358,7 @@ func (a *Alert) Merge(o *Alert) *Alert {
 	if a.StartsAt.Before(o.StartsAt) {
 		res.StartsAt = a.StartsAt
 		res.TriggerAt = a.TriggerAt
+		res.SentCount = a.SentCount
 	}
 
 	if o.Resolved() {
