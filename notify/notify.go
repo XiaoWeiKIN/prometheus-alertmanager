@@ -598,7 +598,7 @@ func (n *DedupStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.Al
 				level.Error(l).Log("msg", "Set stateKey to redis failed", "stateKey", sKey, "err", err)
 				continue
 			}
-			if needsUpdate {
+			if needsUpdate && a.Stage != a.PreStage {
 				firing = append(firing, hash)
 				if count, err := n.rdb.Incr(ctx, AlertSentPrefix+sKey).Result(); err == nil {
 					a.SentCount = count
