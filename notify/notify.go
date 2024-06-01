@@ -566,10 +566,6 @@ func (n *DedupStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.Al
 	if !ok {
 		return ctx, nil, errors.New("repeat interval missing")
 	}
-	flushTime, ok := Now(ctx)
-	if !ok {
-		flushTime = n.now()
-	}
 	var firing []uint64
 	var resolved []uint64
 	needsUpdateAlerts := make([]*types.Alert, 0)
@@ -593,12 +589,17 @@ func (n *DedupStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.Al
 
 			}
 		} else {
-			needsUpdate, err := n.rdb.SetNX(ctx, sKey, flushTime, repeatInterval).Result()
+			stage, err := n.rdb.Get(ctx, sKey).Result()
+			if err != nil {
+				stage = a.Stage
+				level.Error(l).Log("msg", "Get stage from redis failed", "stateKey", sKey, "err", err)
+			}
+			needsUpdate, err := n.rdb.SetNX(ctx, sKey, a.Stage, repeatInterval).Result()
 			if err != nil {
 				level.Error(l).Log("msg", "Set stateKey to redis failed", "stateKey", sKey, "err", err)
 				continue
 			}
-			if needsUpdate && a.Stage != a.PreStage {
+			if needsUpdate || stage != a.Stage {
 				firing = append(firing, hash)
 				if count, err := n.rdb.Incr(ctx, AlertSentPrefix+sKey).Result(); err == nil {
 					a.SentCount = count
