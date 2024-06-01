@@ -594,7 +594,7 @@ func (n *DedupStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.Al
 				stage = a.Stage
 				level.Error(l).Log("msg", "Get stage from redis failed", "stateKey", sKey, "err", err)
 			}
-			if stage != a.Stage {
+			if stage != "" && stage != a.Stage {
 				n.rdb.Del(ctx, sKey)
 			}
 			needsUpdate, err := n.rdb.SetNX(ctx, sKey, a.Stage, repeatInterval).Result()
