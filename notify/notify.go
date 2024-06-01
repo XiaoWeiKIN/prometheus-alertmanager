@@ -594,12 +594,15 @@ func (n *DedupStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.Al
 				stage = a.Stage
 				level.Error(l).Log("msg", "Get stage from redis failed", "stateKey", sKey, "err", err)
 			}
+			if stage != a.Stage {
+				n.rdb.Del(ctx, sKey)
+			}
 			needsUpdate, err := n.rdb.SetNX(ctx, sKey, a.Stage, repeatInterval).Result()
 			if err != nil {
-				level.Error(l).Log("msg", "Set stateKey to redis failed", "stateKey", sKey, "err", err)
+				level.Error(l).Log("msg", "Set stateKey to redis failed", "stateKey", sKey, "stage", stage, "err", err)
 				continue
 			}
-			if needsUpdate || stage != a.Stage {
+			if needsUpdate {
 				firing = append(firing, hash)
 				if count, err := n.rdb.Incr(ctx, AlertSentPrefix+sKey).Result(); err == nil {
 					a.SentCount = count
