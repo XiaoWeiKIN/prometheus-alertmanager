@@ -431,7 +431,7 @@ func (ag *aggrGroup) run(nf notifyFunc) {
 		case now := <-ag.next.C:
 			// Give the notifications time until the next flush to
 			// finish before terminating them.
-			ctx, cancel := context.WithTimeout(ag.ctx, ag.timeout(ag.opts.GroupInterval))
+			ctx, cancel := context.WithTimeout(ag.ctx, ag.timeout(ag.opts.RepeatInterval))
 
 			// The now time we retrieve from the ticker is the only reliable
 			// point of time reference for the subsequent notification pipeline.
