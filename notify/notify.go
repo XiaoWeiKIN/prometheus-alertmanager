@@ -589,17 +589,16 @@ func (n *DedupStage) Exec(ctx context.Context, l log.Logger, alerts ...*types.Al
 
 			}
 		} else {
-			stage, err := n.rdb.Get(ctx, sKey).Result()
-			if err != nil {
-				stage = a.Stage
-				level.Error(l).Log("msg", "Get stage from redis failed", "stateKey", sKey, "err", err)
+			preStage, err := n.rdb.Get(ctx, sKey).Result()
+			if err != nil && errors.Is(err, redis.Nil) {
+				preStage = a.Stage
 			}
-			if stage != "" && stage != a.Stage {
+			if preStage != a.Stage {
 				n.rdb.Del(ctx, sKey)
 			}
 			needsUpdate, err := n.rdb.SetNX(ctx, sKey, a.Stage, repeatInterval).Result()
 			if err != nil {
-				level.Error(l).Log("msg", "Set stateKey to redis failed", "stateKey", sKey, "stage", stage, "err", err)
+				level.Error(l).Log("msg", "Set stateKey to redis failed", "stateKey", sKey, "stage", a.Stage, "err", err)
 				continue
 			}
 			if needsUpdate {
