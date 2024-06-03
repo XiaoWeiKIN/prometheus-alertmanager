@@ -359,6 +359,7 @@ func (a *Alert) Merge(o *Alert) *Alert {
 		res.StartsAt = a.StartsAt
 		res.TriggerAt = a.TriggerAt
 		res.SentCount = a.SentCount
+		res.ClaimAt = a.ClaimAt
 	}
 
 	if o.Resolved() {
